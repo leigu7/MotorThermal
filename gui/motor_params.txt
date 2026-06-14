@@ -1,0 +1,41 @@
+=== Motor Thermal Model - Parameters ===
+
+structure_type: Slotless
+Rso: 6.0
+Rsi: 3.25
+stack_length: 40.0
+num_slots: 0
+slot_depth: 1.4
+slot_opening: 0
+tooth_width_min: 0
+slot_wedge_height: 0
+winding_layers: 0
+conductor_diameter: 0.2
+turns_per_slot: 60
+fill_factor: 0.45
+insulation_class: Class R (220°C)
+Rro: 3.0
+Rri: 0.0
+num_poles: 2
+magnet_thickness: 1.4
+magnet_span_ratio: 1.0
+magnet_grade: N35SH
+magnet_max_temp: 150.0
+airgap_length: 0.25
+housing_wall_thickness: 0.5
+housing_finned: False
+shaft_radius: 0.0
+
+=== Derived Quantities ===
+pole_pitch_angle_deg: 180.0
+magnet_arc_angle_deg: 180.0
+slot_pitch_angle_deg: 0
+stator_yoke_thickness: 2.75
+rotor_back_iron: 1.6
+slot_area_mm2: 0.0
+conductor_area_mm2: 0.031415926535897934
+total_conductor_area_mm2: 1.884955592153876
+effective_slot_fill: 0
+tooth_bottom_width: 0.0
+Rslot_bottom: 4.65
+magnet_arc_angle_rad: 3.141592653589793
