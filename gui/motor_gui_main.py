@@ -783,44 +783,45 @@ class ResultPanel(QWidget):
     """
     Panel showing detailed LPTN model results (in the Results tab).
     Displays:
+      - Network schematic diagram
       - Node table: name, temp, loss, volume, capacitance
       - Resistance table: name, from-to, R, type, length, area, k, h
-    The network schematic is shown in the right panel.
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._net = None
+        self._undock_window = None
         self._setup_ui()
 
-        def _setup_ui(self):
-            layout = QVBoxLayout(self)
-            layout.setContentsMargins(4, 4, 4, 4)
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
 
-            # Network info at top
-            self._net_info = QLabel("No simulation data. Run LPTN first.")
-            self._net_info.setStyleSheet("font-weight: bold; font-size: 11pt; padding: 2px;")
-            layout.addWidget(self._net_info)
+        # Network info at top
+        self._net_info = QLabel("No simulation data. Run LPTN first.")
+        self._net_info.setStyleSheet("font-weight: bold; font-size: 11pt; padding: 2px;")
+        layout.addWidget(self._net_info)
 
-            # Undock button
-            btn_layout = QHBoxLayout()
-            self._btn_undock = QPushButton("Undock Network Diagram")
-            self._btn_undock.clicked.connect(self._undock_network)
-            self._btn_undock.setEnabled(False)
-            self._btn_undock.setStyleSheet(
-                "QPushButton { background-color: #2c3e50; color: white; "
-                "border-radius: 4px; padding: 4px 12px; font-size: 9pt; }"
-                "QPushButton:hover { background-color: #34495e; }"
-                "QPushButton:disabled { background-color: #cccccc; color: #888888; }"
-            )
-            btn_layout.addWidget(self._btn_undock)
-            btn_layout.addStretch()
-            layout.addLayout(btn_layout)
+        # Undock button
+        btn_layout = QHBoxLayout()
+        self._btn_undock = QPushButton("Undock Network Diagram")
+        self._btn_undock.clicked.connect(self._undock_network)
+        self._btn_undock.setEnabled(False)
+        self._btn_undock.setStyleSheet(
+            "QPushButton { background-color: #2c3e50; color: white; "
+            "border-radius: 4px; padding: 4px 12px; font-size: 9pt; }"
+            "QPushButton:hover { background-color: #34495e; }"
+            "QPushButton:disabled { background-color: #cccccc; color: #888888; }"
+        )
+        btn_layout.addWidget(self._btn_undock)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
 
-            # Network schematic canvas
-            self._net_canvas = ThermalNetworkCanvas(self, width=9, height=4, dpi=100)
-            self._net_canvas.setMinimumHeight(280)
-            layout.addWidget(self._net_canvas)
+        # Network schematic canvas
+        self._net_canvas = ThermalNetworkCanvas(self, width=9, height=4, dpi=100)
+        self._net_canvas.setMinimumHeight(280)
+        layout.addWidget(self._net_canvas)
 
         # Node properties table
         node_group = QGroupBox("Node Properties")
@@ -848,50 +849,22 @@ class ResultPanel(QWidget):
         res_layout.addWidget(self._res_table)
         layout.addWidget(res_group)
 
-        def display_network(self, net: ThermalNetwork, config: NetworkBuilderConfig = None):
-            """Fill tables with network data."""
-            self._net = net
-            conv = getattr(net, 'solver_converged', None)
-            iters = getattr(net, 'solver_iterations', None)
-            info = f"Network: {net.name} | {len(net.nodes)} nodes, {len(net.resistances)} resistances"
-            if iters:
-                info += f" | {iters} iterations"
-                info += " | Converged" if conv else " | Not converged"
-            self._net_info.setText(info)
+    def display_network(self, net: ThermalNetwork, config: NetworkBuilderConfig = None):
+        """Fill tables with network data."""
+        self._net = net
+        conv = getattr(net, 'solver_converged', None)
+        iters = getattr(net, 'solver_iterations', None)
+        info = f"Network: {net.name} | {len(net.nodes)} nodes, {len(net.resistances)} resistances"
+        if iters:
+            info += f" | {iters} iterations"
+            info += " | Converged" if conv else " | Not converged"
+        self._net_info.setText(info)
 
-            # Enable undock button
-            self._btn_undock.setEnabled(True)
+        # Enable undock button
+        self._btn_undock.setEnabled(True)
 
-            # Draw the schematic
-            self._net_canvas.draw_network(net)
-
-            # ---- Node table ----
-
-        def _undock_network(self):
-            """Open a separate window with the full-size network diagram."""
-            if not self._net:
-                return
-            from PyQt5.QtWidgets import QMainWindow as QMWindow
-            from PyQt5.QtCore import Qt as Qtt
-            self._undock_window = QMWindow()
-            self._undock_window.setWindowTitle("Thermal Network Diagram")
-            self._undock_window.setMinimumSize(1000, 700)
-        
-            central = QWidget()
-            layout = QVBoxLayout(central)
-        
-            # Larger canvas for the undocked view
-            canvas = ThermalNetworkCanvas(self._undock_window, width=12, height=7, dpi=100)
-            canvas.draw_network(self._net)
-            layout.addWidget(canvas)
-        
-            # Close button
-            close_btn = QPushButton("Close Window")
-            close_btn.clicked.connect(self._undock_window.close)
-            layout.addWidget(close_btn)
-        
-            self._undock_window.setCentralWidget(central)
-            self._undock_window.show()
+        # Draw the schematic
+        self._net_canvas.draw_network(net)
 
         # ---- Node table ----
         nodes = net.nodes
@@ -961,6 +934,31 @@ class ResultPanel(QWidget):
 
         self._res_table.resizeColumnsToContents()
 
+    def _undock_network(self):
+        """Open a separate window with the full-size network diagram."""
+        if not self._net:
+            return
+        from PyQt5.QtWidgets import QMainWindow as QMWindow
+        from PyQt5.QtCore import Qt as Qtt
+        self._undock_window = QMWindow()
+        self._undock_window.setWindowTitle("Thermal Network Diagram")
+        self._undock_window.setMinimumSize(1000, 700)
+        
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        
+        # Larger canvas for the undocked view
+        canvas = ThermalNetworkCanvas(self._undock_window, width=12, height=7, dpi=100)
+        canvas.draw_network(self._net)
+        layout.addWidget(canvas)
+        
+        # Close button
+        close_btn = QPushButton("Close Window")
+        close_btn.clicked.connect(self._undock_window.close)
+        layout.addWidget(close_btn)
+        
+        self._undock_window.setCentralWidget(central)
+        self._undock_window.show()
 class MainWindow(QMainWindow):
     """Main application window."""
 
@@ -1038,7 +1036,7 @@ class MainWindow(QMainWindow):
 
         # Status info label
         self._status_label = QLabel("Ready. Adjust parameters to update geometry.")
-                self._status_label.setStyleSheet("font-size: 9pt; color: #666;")
+        self._status_label.setStyleSheet("font-size: 9pt; color: #666;")
 
         right_layout.addWidget(self._canvas)
         right_layout.addLayout(controls_layout)
@@ -1081,7 +1079,7 @@ class MainWindow(QMainWindow):
         self._lptn_panel.runRequested.connect(self._run_lptn)
         QTimer.singleShot(100, self._redraw)
 
-    def _on_geo_changeddef _on_geo_changed(self, geo: MotorGeometryParams):
+    def _on_geo_changed(self, geo: MotorGeometryParams):
         """Called when geometry parameters change."""
         self._geo = geo
         self._redraw()
@@ -1152,7 +1150,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "LPTN Error", f"Simulation failed:\n{e}")
             self.statusBar().showMessage(f"LPTN error: {e}")
 
-        def _display_lptn_results(self, net: ThermalNetwork):
+    def _display_lptn_results(self, net: ThermalNetwork):
         """Fill the results table and update the Results tab with network schematic."""
         self._lptn_results = {}
         nodes = net.nodes
