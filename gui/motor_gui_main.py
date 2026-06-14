@@ -773,58 +773,73 @@ class ThermalNetworkCanvas(FigureCanvas):
         self._net = None
 
     def draw_network(self, net: ThermalNetwork):
-        """Draw a schematic diagram of the thermal network."""
-        from matplotlib.patches import Circle, FancyBboxPatch, FancyArrowPatch, Patch
-        from matplotlib.lines import Line2D
-        import matplotlib.pyplot as plt
+        """Draw thermal network schematic using BFS tree layout."""
         import numpy as np
-        from collections import defaultdict
+        from matplotlib.patches import Circle, Patch as MPatch
+        from collections import defaultdict, deque
 
         self._net = net
         ax = self.ax
         ax.clear()
 
-        # Layout: position nodes in a ring around center, with ambient on top
         nodes = net.nodes
         n = len(nodes)
 
-        # Identify node groups
-        ambient_nodes = [node for node in nodes if "ambient" in node.name.lower() or node.name.lower() == "amb"]
-        heat_source_nodes = [node for node in nodes if node.effective_loss > 0.001]
-        other_nodes = [node for node in nodes if node not in ambient_nodes and node not in heat_source_nodes]
-        heat_names = {n.name for n in heat_source_nodes}
+        # Build adjacency
+        adj = defaultdict(list)
+        for r in net.resistances:
+            if r.node_from < n and r.node_to < n:
+                adj[nodes[r.node_from].name].append(nodes[r.node_to].name)
+                adj[nodes[r.node_to].name].append(nodes[r.node_from].name)
 
-        # Use hierarchical layout
+        # Find root (ambient)
+        root = "ambient"
+        if root not in adj:
+            root = nodes[0].name
+
+        # BFS to get layers
+        dist = {root: 0}
+        q = deque([root])
+        parent = {root: None}
+        while q:
+            cur = q.popleft()
+            for nb in adj[cur]:
+                if nb not in dist:
+                    dist[nb] = dist[cur] + 1
+                    parent[nb] = cur
+                    q.append(nb)
+
+        for node in nodes:
+            if node.name not in dist:
+                dist[node.name] = max(dist.values()) + 1
+
+        # Group by layer
+        layers = defaultdict(list)
+        for name, d in dist.items():
+            layers[d].append(name)
+
+        # Assign y-spacing per layer so nodes don't overlap
+        # Use the max count across all layers to set global spacing
+        max_in_layer = max(len(names) for names in layers.values())
+        vert_spacing = max(3.0, 10.0 / max(max_in_layer, 1))
+
         pos = {}
-        angles = np.linspace(np.pi / 2 + np.pi / 2 / max(1, n), np.pi / 2 - np.pi / 2 / max(1, n), max(1, len(other_nodes)))
+        for layer_key in sorted(layers.keys()):
+            names = layers[layer_key]
+            m = len(names)
+            # Center the group around y=0
+            start_y = -(m - 1) * vert_spacing / 2
+            for i, name in enumerate(names):
+                x = layer_key * 2.5
+                y = start_y + i * vert_spacing
+                pos[name] = (x, y)
 
-        for i, node in enumerate(other_nodes):
-            a = angles[min(i, len(angles) - 1)]
-            r = 3.5
-            x, y = r * np.cos(a), r * np.sin(a)
-            pos[node.name] = (x, y)
-
-        for node in heat_source_nodes:
-            a = np.random.uniform(0, 2 * np.pi) if node.name not in pos else 0
-            r = 1.5
-            x, y = r * np.cos(a), r * np.sin(a)
-            pos[node.name] = (x, y)
-
-        for node in ambient_nodes:
-            pos[node.name] = (0, 6.5)
-
-        # Assign default positions for any unassigned nodes
-        used = list(pos.keys())
-        unused = [n.name for n in nodes if n.name not in used]
-        for i, name in enumerate(unused):
-            a = 2 * np.pi * i / max(1, len(unused))
-            r = 4.0
-            pos[name] = (r * np.cos(a), r * np.sin(a))
-
-        # Temperature color mapping
-        temps = np.array([node.temperature for node in nodes if "ambient" not in node.name.lower()])
-        t_min = temps.min() if len(temps) > 0 else 20
-        t_max = temps.max() if len(temps) > 0 else 150
+        # ---- Temperature color ----
+        ambient_names = {node.name for node in nodes if "ambient" in node.name.lower()}
+        core_nodes = [n for n in nodes if n.name not in ambient_names]
+        temps_arr = np.array([n.temperature for n in core_nodes])
+        t_min = temps_arr.min() if len(temps_arr) > 0 else 20
+        t_max = temps_arr.max() if len(temps_arr) > 0 else 150
         t_range = max(t_max - t_min, 1)
 
         def temp_color(temp, is_ambient=False):
@@ -836,15 +851,13 @@ class ThermalNetworkCanvas(FigureCanvas):
             b = max(0, 1 - norm * 2)
             return (r, g, b)
 
-        max_c = max(node.capacitance for node in nodes) if nodes else 1
-        min_c = min(node.capacitance for node in nodes) if nodes else 0
-        c_range = max(max_c - min_c, 1)
-
-        # Draw resistances as lines
+        # ---- Draw resistances ----
         edge_style = defaultdict(int)
+        r_annotations = []
+
         for res in net.resistances:
-            from_name = net.nodes[res.node_from].name if res.node_from < len(net.nodes) else f"n{res.node_from}"
-            to_name = net.nodes[res.node_to].name if res.node_to < len(net.nodes) else f"n{res.node_to}"
+            from_name = nodes[res.node_from].name if res.node_from < n else f"n{res.node_from}"
+            to_name = nodes[res.node_to].name if res.node_to < n else f"n{res.node_to}"
             if from_name not in pos or to_name not in pos:
                 continue
             x1, y1 = pos[from_name]
@@ -852,7 +865,6 @@ class ThermalNetworkCanvas(FigureCanvas):
             key = tuple(sorted([from_name, to_name]))
             edge_style[key] += 1
 
-            # Color by resistance type
             if "convection" in res.resistance_type.lower():
                 color = "#E67E22"
                 ls = "--"
@@ -860,7 +872,7 @@ class ThermalNetworkCanvas(FigureCanvas):
                 color = "#2980B9"
                 ls = "-"
 
-            offset = (edge_style[key] - 1) * 0.15
+            offset = (edge_style[key] - 1) * 0.3
             dx = x2 - x1
             dy = y2 - y1
             length = np.sqrt(dx**2 + dy**2)
@@ -871,59 +883,78 @@ class ThermalNetworkCanvas(FigureCanvas):
             else:
                 x1o, y1o, x2o, y2o = x1, y1, x2, y2
 
-            ax.plot([x1o, x2o], [y1o, y2o], color=color, ls=ls, lw=1.5, zorder=1, alpha=0.7)
+            ax.plot([x1o, x2o], [y1o, y2o], color=color, ls=ls, lw=1.5, zorder=1, alpha=0.6)
 
-            # R label at midpoint
             mx, my = (x1o + x2o) / 2, (y1o + y2o) / 2
             r_val = res.effective_resistance
-            r_type_short = res.resistance_type[:4]
-            label = f"{r_val:.3f}\n{r_type_short}"
-            ax.text(mx, my, f"{r_val:.3f}", fontsize=7, ha="center", va="center",
-                    color=color, fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=color, alpha=0.8))
+            parts = [f"R={r_val:.4f}"]
+            if res.resistance_type == "convection" and res.h_coefficient > 0:
+                parts.append(f"h={res.h_coefficient:.0f}")
+            elif res.conductivity > 0:
+                parts.append(f"k={res.conductivity:.3f}")
+            label = "\\n".join(parts)
+            r_annotations.append((mx, my, label, color))
 
-        # Draw nodes as circles
+        for mx, my, text, color in r_annotations:
+            ax.text(mx, my, text, fontsize=6.5, ha="center", va="center",
+                    color=color, fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=color, alpha=0.85))
+
+        # ---- Draw nodes ----
         for node in nodes:
             name = node.name
             x, y = pos.get(name, (0, 0))
             is_ambient = name.lower() in ["ambient", "amb"]
             color = temp_color(node.temperature, is_ambient)
-            c = max(0.5, (node.capacitance - min_c) / c_range * 1.5 + 0.5)
-            radius = 0.35 + c * 0.25
-            alpha = 0.7 if is_ambient else 0.9
 
+            radius = 0.50
             circle = Circle((x, y), radius, facecolor=color, edgecolor="#333333",
-                            linewidth=1.5, alpha=alpha, zorder=2)
+                            linewidth=1.5, alpha=0.9, zorder=2)
             ax.add_patch(circle)
 
-            temp_str = f"{node.temperature:.0f}C"
-            ax.text(x, y, f"{name}\n{temp_str}", fontsize=7, ha="center", va="center",
+            # Node name inside circle
+            ax.text(x, y, name, fontsize=7, ha="center", va="center",
                     color="white" if node.temperature > 120 else "black",
                     fontweight="bold", zorder=3)
 
-            # Heat source annotation
-            if node.effective_loss > 0.001:
-                ax.annotate(f"{node.effective_loss:.1f}W", (x, y - radius - 0.3),
-                            fontsize=6, ha="center", va="top", color="#C0392B",
-                            fontweight="bold", zorder=3)
+            # Parameters below circle
+            lines_below = [f"{node.temperature:.1f}C"]
+            lines_below.append(f"Loss={node.effective_loss:.3f}W")
+            lines_below.append(f"Cap={node.capacitance:.1f}J/K")
+            lines_below.append(f"Vol={node.volume*1e6:.1f}cm3")
+            info_text = "\n".join(lines_below)
+            ax.text(x, y - radius - 0.5, info_text, fontsize=6,
+                    ha="center", va="top", color="#444",
+                    fontfamily="monospace", zorder=3)
 
-        # Legend
-        from matplotlib.patches import Patch as MPatch
+            # Loss above circle (if significant)
+            if node.effective_loss > 0.001:
+                ax.text(x, y + radius + 0.4, f"{node.effective_loss:.2f}W", fontsize=6.5,
+                        ha="center", va="bottom", color="#C0392B", fontweight="bold", zorder=3)
+
+        # ---- Legend ----
         legend_elements = [
             MPatch(facecolor=temp_color(t_min), edgecolor="#333", label=f"Min T ({t_min:.0f}C)"),
-            MPatch(facecolor=temp_color((t_min + t_max) / 2), edgecolor="#333", label=f"Mid T"),
+            MPatch(facecolor=temp_color((t_min + t_max) / 2), edgecolor="#333", label="Mid T"),
             MPatch(facecolor=temp_color(t_max), edgecolor="#333", label=f"Max T ({t_max:.0f}C)"),
-            MPatch(facecolor="#4488FF", edgecolor="#333", label="Ambient (BC)"),
+            MPatch(facecolor="#4488FF", edgecolor="#333", label="Ambient"),
         ]
         ax.legend(handles=legend_elements, loc="lower center", fontsize=6,
-                  ncol=4, bbox_to_anchor=(0.5, -0.08))
+                  ncol=4, bbox_to_anchor=(0.5, -0.06))
+
+        # Auto-scale
+        all_x = [v[0] for v in pos.values()]
+        all_y = [v[1] for v in pos.values()]
+        margin = 2.5
+        x_min, x_max = min(all_x) - margin, max(all_x) + margin
+        y_min, y_max = min(all_y) - margin, max(all_y) + margin
 
         ax.set_aspect("equal")
-        ax.set_title(f"Thermal Network: {net.name}", fontweight="bold", fontsize=10)
-        ax.set_xlim(-6, 6)
-        ax.set_ylim(-5, 8)
+        ax.set_title(f"Thermal Network: {net.name}", fontweight="bold", fontsize=11)
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
         ax.axis("off")
-        self.fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        self.fig.tight_layout(rect=[0, 0.04, 1, 0.96])
         self.draw()
 class ResultPanel(QWidget):
     """

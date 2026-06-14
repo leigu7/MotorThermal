@@ -336,7 +336,21 @@ class GeometryMapper:
         idx_tip = idx
         idx += 1
         
-        # 6. Magnet
+        # 6. Airgap (separate thermal node)
+        # Airgap volume = annular volume between Rsi and Rro
+        V_airgap = math.pi * (Rsi_m**2 - Rro_m**2) * Lstk_m * sf
+        # Air density at ~80C, cp ~ 1005 J/kgK
+        rho_air = 1.05  # kg/m3 at ~80C
+        cp_air = 1005   # J/kgK
+        nodes.append(ThermalNode(
+            name="airgap", index=idx, volume=max(V_airgap, 1e-12),
+            density=rho_air, cp=cp_air,
+            loss=0,
+        ))
+        idx_airgap = idx
+        idx += 1
+        
+        # 7. Magnet
         pole_angle = 2 * math.pi / geo.num_poles
         magnet_arc = pole_angle * geo.magnet_span_ratio
         Rmag_outer_m = Rro_m
@@ -559,24 +573,36 @@ class GeometryMapper:
         add_R("R_tip_winding", idx_tip, idx_winding, R_tip_winding, "convection",
               effective_length=Hs0_m if is_slotted else 0)
         
-        # R8: Magnet → Stator Tip (airgap convection)
-        # Airgap convection couples rotor surface to stator bore
-        h_ag = h_airgap_natural(Rro_m, gap_m, Lstk_m, cfg.speed_rpm)
-        A_airgap = 2 * math.pi * Rro_m * Lstk_m * sf
-        R_airgap = r_convective(A_airgap, h_ag)
-        add_R("R_airgap_magnet_tip", idx_magnet, idx_tip, R_airgap, "convection",
-              effective_area=A_airgap, h_coefficient=h_ag)
+                # R8: Stator Tip -> Airgap (stationary side convection)
+        # Heat transfer from stator bore surface to air in the gap
+        # Use natural/forced correlation for the stationary surface
+        h_ag_stator = h_airgap_natural(Rsi_m, gap_m, Lstk_m, 0)  # 0 rpm -> stationary side
+        # Area at stator bore
+        if is_slotted:
+            A_airgap_stator = 2 * math.pi * Rsi_m * Lstk_m * sf * (1 - Bs0_m / (slot_pitch_angle * Rsi_m))
+        else:
+            A_airgap_stator = 2 * math.pi * Rsi_m * Lstk_m * sf
+        R_tip_airgap = r_convective(A_airgap_stator, h_ag_stator)
+        add_R("R_tip_airgap", idx_tip, idx_airgap, R_tip_airgap, "convection",
+              effective_area=A_airgap_stator, h_coefficient=h_ag_stator)
         
-        # Also couple airgap to tooth directly (since tip is small)
+        # Also couple stator tooth directly to airgap (tip is small, tooth exposes more)
         if is_slotted:
             A_airgap_tooth = 2 * math.pi * Rsi_m * Lstk_m * sf * (1 - Bs0_m / (slot_pitch_angle * Rsi_m))
-        else:
-            A_airgap_tooth = A_airgap
-        R_airgap_tooth = r_convective(A_airgap_tooth, h_ag)
-        add_R("R_airgap_tooth", idx_magnet, idx_tooth, R_airgap_tooth, "convection",
-              effective_area=A_airgap_tooth, h_coefficient=h_ag)
+            h_ag_tooth = h_airgap_natural(Rsi_m, gap_m, Lstk_m, 0)
+            R_tooth_airgap = r_convective(A_airgap_tooth, h_ag_tooth)
+            add_R("R_tooth_airgap", idx_tooth, idx_airgap, R_tooth_airgap, "convection",
+                  effective_area=A_airgap_tooth, h_coefficient=h_ag_tooth)
         
-        # R9: Rotor Core → Magnet
+        # R9: Airgap -> Magnet (rotor side, rotating convection)
+        # Rotating surface uses Taylor number correlation at full speed
+        h_ag_rotor = h_airgap_natural(Rro_m, gap_m, Lstk_m, cfg.speed_rpm)
+        A_airgap_rotor = 2 * math.pi * Rro_m * Lstk_m * sf
+        R_airgap_magnet = r_convective(A_airgap_rotor, h_ag_rotor)
+        add_R("R_airgap_magnet", idx_airgap, idx_magnet, R_airgap_magnet, "convection",
+              effective_area=A_airgap_rotor, h_coefficient=h_ag_rotor)
+        
+# R9: Rotor Core → Magnet
         R_rotor_magnet = r_cylindrical_radial(
             Rmag_inner_m, Rmag_outer_m, Lstk_m, k_radial("magnet"), sf
         )
@@ -594,7 +620,7 @@ class GeometryMapper:
               effective_area=2*math.pi*Rshaft_m*Lstk_m*sf,
               conductivity=k_radial("shaft"))
         
-        # R11: Rotor Core inner to Shaft (alternate path through shaft)
+        # R12: Rotor Core -> Shaft (alternate path)
         if Rri_m > Rshaft_m:
             R_rotor_shaft_inner = r_cylindrical_radial(
                 Rshaft_m, Rri_m, Lstk_m, k_radial("rotor_core"), sf
