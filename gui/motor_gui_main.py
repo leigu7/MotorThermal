@@ -774,11 +774,157 @@ class ThermalNetworkCanvas(FigureCanvas):
 
     def draw_network(self, net: ThermalNetwork):
         """Draw a schematic diagram of the thermal network."""
-        from matplotlib.patches import Circle, Patch
+        from matplotlib.patches import Circle, FancyBboxPatch, FancyArrowPatch, Patch
+        from matplotlib.lines import Line2D
+        import matplotlib.pyplot as plt
+        import numpy as np
         from collections import defaultdict
-        # ... rest of method ...
 
+        self._net = net
+        ax = self.ax
+        ax.clear()
 
+        # Layout: position nodes in a ring around center, with ambient on top
+        nodes = net.nodes
+        n = len(nodes)
+
+        # Identify node groups
+        ambient_nodes = [node for node in nodes if "ambient" in node.name.lower() or node.name.lower() == "amb"]
+        heat_source_nodes = [node for node in nodes if node.effective_loss > 0.001]
+        other_nodes = [node for node in nodes if node not in ambient_nodes and node not in heat_source_nodes]
+        heat_names = {n.name for n in heat_source_nodes}
+
+        # Use hierarchical layout
+        pos = {}
+        angles = np.linspace(np.pi / 2 + np.pi / 2 / max(1, n), np.pi / 2 - np.pi / 2 / max(1, n), max(1, len(other_nodes)))
+
+        for i, node in enumerate(other_nodes):
+            a = angles[min(i, len(angles) - 1)]
+            r = 3.5
+            x, y = r * np.cos(a), r * np.sin(a)
+            pos[node.name] = (x, y)
+
+        for node in heat_source_nodes:
+            a = np.random.uniform(0, 2 * np.pi) if node.name not in pos else 0
+            r = 1.5
+            x, y = r * np.cos(a), r * np.sin(a)
+            pos[node.name] = (x, y)
+
+        for node in ambient_nodes:
+            pos[node.name] = (0, 6.5)
+
+        # Assign default positions for any unassigned nodes
+        used = list(pos.keys())
+        unused = [n.name for n in nodes if n.name not in used]
+        for i, name in enumerate(unused):
+            a = 2 * np.pi * i / max(1, len(unused))
+            r = 4.0
+            pos[name] = (r * np.cos(a), r * np.sin(a))
+
+        # Temperature color mapping
+        temps = np.array([node.temperature for node in nodes if "ambient" not in node.name.lower()])
+        t_min = temps.min() if len(temps) > 0 else 20
+        t_max = temps.max() if len(temps) > 0 else 150
+        t_range = max(t_max - t_min, 1)
+
+        def temp_color(temp, is_ambient=False):
+            if is_ambient:
+                return "#4488FF"
+            norm = (temp - t_min) / t_range
+            r = min(1, norm * 2)
+            g = min(1, 2 - norm * 2) if norm < 0.5 else max(0, 2 - norm * 2)
+            b = max(0, 1 - norm * 2)
+            return (r, g, b)
+
+        max_c = max(node.capacitance for node in nodes) if nodes else 1
+        min_c = min(node.capacitance for node in nodes) if nodes else 0
+        c_range = max(max_c - min_c, 1)
+
+        # Draw resistances as lines
+        edge_style = defaultdict(int)
+        for res in net.resistances:
+            from_name = net.nodes[res.node_from].name if res.node_from < len(net.nodes) else f"n{res.node_from}"
+            to_name = net.nodes[res.node_to].name if res.node_to < len(net.nodes) else f"n{res.node_to}"
+            if from_name not in pos or to_name not in pos:
+                continue
+            x1, y1 = pos[from_name]
+            x2, y2 = pos[to_name]
+            key = tuple(sorted([from_name, to_name]))
+            edge_style[key] += 1
+
+            # Color by resistance type
+            if "convection" in res.resistance_type.lower():
+                color = "#E67E22"
+                ls = "--"
+            else:
+                color = "#2980B9"
+                ls = "-"
+
+            offset = (edge_style[key] - 1) * 0.15
+            dx = x2 - x1
+            dy = y2 - y1
+            length = np.sqrt(dx**2 + dy**2)
+            if length > 0:
+                nx, ny = -dy / length, dx / length
+                x1o, y1o = x1 + nx * offset, y1 + ny * offset
+                x2o, y2o = x2 + nx * offset, y2 + ny * offset
+            else:
+                x1o, y1o, x2o, y2o = x1, y1, x2, y2
+
+            ax.plot([x1o, x2o], [y1o, y2o], color=color, ls=ls, lw=1.5, zorder=1, alpha=0.7)
+
+            # R label at midpoint
+            mx, my = (x1o + x2o) / 2, (y1o + y2o) / 2
+            r_val = res.effective_resistance
+            r_type_short = res.resistance_type[:4]
+            label = f"{r_val:.3f}\n{r_type_short}"
+            ax.text(mx, my, f"{r_val:.3f}", fontsize=7, ha="center", va="center",
+                    color=color, fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=color, alpha=0.8))
+
+        # Draw nodes as circles
+        for node in nodes:
+            name = node.name
+            x, y = pos.get(name, (0, 0))
+            is_ambient = name.lower() in ["ambient", "amb"]
+            color = temp_color(node.temperature, is_ambient)
+            c = max(0.5, (node.capacitance - min_c) / c_range * 1.5 + 0.5)
+            radius = 0.35 + c * 0.25
+            alpha = 0.7 if is_ambient else 0.9
+
+            circle = Circle((x, y), radius, facecolor=color, edgecolor="#333333",
+                            linewidth=1.5, alpha=alpha, zorder=2)
+            ax.add_patch(circle)
+
+            temp_str = f"{node.temperature:.0f}C"
+            ax.text(x, y, f"{name}\n{temp_str}", fontsize=7, ha="center", va="center",
+                    color="white" if node.temperature > 120 else "black",
+                    fontweight="bold", zorder=3)
+
+            # Heat source annotation
+            if node.effective_loss > 0.001:
+                ax.annotate(f"{node.effective_loss:.1f}W", (x, y - radius - 0.3),
+                            fontsize=6, ha="center", va="top", color="#C0392B",
+                            fontweight="bold", zorder=3)
+
+        # Legend
+        from matplotlib.patches import Patch as MPatch
+        legend_elements = [
+            MPatch(facecolor=temp_color(t_min), edgecolor="#333", label=f"Min T ({t_min:.0f}C)"),
+            MPatch(facecolor=temp_color((t_min + t_max) / 2), edgecolor="#333", label=f"Mid T"),
+            MPatch(facecolor=temp_color(t_max), edgecolor="#333", label=f"Max T ({t_max:.0f}C)"),
+            MPatch(facecolor="#4488FF", edgecolor="#333", label="Ambient (BC)"),
+        ]
+        ax.legend(handles=legend_elements, loc="lower center", fontsize=6,
+                  ncol=4, bbox_to_anchor=(0.5, -0.08))
+
+        ax.set_aspect("equal")
+        ax.set_title(f"Thermal Network: {net.name}", fontweight="bold", fontsize=10)
+        ax.set_xlim(-6, 6)
+        ax.set_ylim(-5, 8)
+        ax.axis("off")
+        self.fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        self.draw()
 class ResultPanel(QWidget):
     """
     Panel showing detailed LPTN model results (in the Results tab).
