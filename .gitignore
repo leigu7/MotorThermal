@@ -15,3 +15,8 @@ _fix*
 _edit*
 _restore*
 _test*
+_check*
+_add_*
+*.html
+*.json
+

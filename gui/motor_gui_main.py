@@ -17,14 +17,15 @@ if _project_root not in sys.path:
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout,
     QHBoxLayout, QGroupBox, QFormLayout, QLabel, QLineEdit,
-    QDoubleSpinBox, QSpinBox, QComboBox, QPushButton, QSplitter,
-    QMessageBox, QTextEdit, QCheckBox, QGridLayout, QFrame,
+    QDoubleSpinBox, QSpinBox, QComboBox, QPushButton,
+        QMessageBox, QTextEdit, QCheckBox, QGridLayout, QFrame,
     QStatusBar, QAction, QFileDialog, QSlider, QScrollArea,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractSpinBox,
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtCore import pyqtSignal as Signal
 from PyQt5.QtGui import QFont, QPalette, QColor
+from PyQt5.QtWidgets import QSizePolicy
 
 # Import our modules
 from geometry.motor_geometry import MotorGeometryParams
@@ -673,7 +674,81 @@ class LPTNInputPanel(QWidget):
         sl.addWidget(solver_group)
 
         # ============================================================
-        # 6. Run Button
+        # 6. Slot Liner Configuration
+        # ============================================================
+        liner_group = QGroupBox("Slot Liner (Winding Insulation)")
+        liner_layout = QFormLayout(liner_group)
+
+        self._sb_liner_thickness = QDoubleSpinBox()
+        self._sb_liner_thickness.setRange(0.05, 2.0)
+        self._sb_liner_thickness.setValue(0.3)
+        self._sb_liner_thickness.setSuffix(" mm")
+        self._sb_liner_thickness.setSingleStep(0.05)
+        self._sb_liner_thickness.setDecimals(2)
+        self._sb_liner_thickness.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        liner_layout.addRow("Thickness:", self._sb_liner_thickness)
+
+        self._sb_liner_k = QDoubleSpinBox()
+        self._sb_liner_k.setRange(0.05, 1.0)
+        self._sb_liner_k.setValue(0.25)
+        self._sb_liner_k.setSuffix(" W/mK")
+        self._sb_liner_k.setSingleStep(0.05)
+        self._sb_liner_k.setDecimals(3)
+        self._sb_liner_k.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        liner_layout.addRow("Conductivity (k):", self._sb_liner_k)
+
+        self._sb_bearing_R = QDoubleSpinBox()
+        self._sb_bearing_R.setRange(0.01, 5.0)
+        self._sb_bearing_R.setValue(0.3)
+        self._sb_bearing_R.setSuffix(" K/W")
+        self._sb_bearing_R.setSingleStep(0.05)
+        self._sb_bearing_R.setDecimals(3)
+        self._sb_bearing_R.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        liner_layout.addRow("Bearing R:", self._sb_bearing_R)
+
+        sl.addWidget(liner_group)
+
+        # ============================================================
+        # 7. Sensitivity Study
+        # ============================================================
+        sens_group = QGroupBox("Sensitivity Study")
+        sens_layout = QFormLayout(sens_group)
+
+        self._cb_sensitivity_param = QComboBox()
+        for name, label, pmin, pmax, steps in SensitivityStudyRunner.SWEEP_PARAMS:
+            self._cb_sensitivity_param.addItem(label, name)
+        self._cb_sensitivity_param.setCurrentIndex(0)
+        self._cb_sensitivity_param.currentIndexChanged.connect(self._on_sens_param_changed)
+        sens_layout.addRow("Parameter:", self._cb_sensitivity_param)
+
+        self._sb_sens_min = FloatInput("Min", 0.05, 0, 100, 0.1, "", 3)
+        sens_layout.addRow("Min Value:", self._sb_sens_min)
+
+        self._sb_sens_max = FloatInput("Max", 1.0, 0, 100, 0.1, "", 3)
+        sens_layout.addRow("Max Value:", self._sb_sens_max)
+
+        self._sb_sens_steps = FloatInput("Steps", 6, 2, 50, 1, "", 0)
+        sens_layout.addRow("Steps:", self._sb_sens_steps)
+
+        self._sens_progress = QLabel("Ready")
+        self._sens_progress.setStyleSheet("font-size: 9pt; color: #555; padding: 4px;")
+        sens_layout.addRow("Progress:", self._sens_progress)
+
+        self._btn_run_sensitivity = QPushButton("🔬 Run Sensitivity Study")
+        self._btn_run_sensitivity.setMinimumHeight(36)
+        self._btn_run_sensitivity.setStyleSheet(
+            "QPushButton { background-color: #8e44ad; color: white; font-weight: bold; "
+            "border-radius: 6px; padding: 8px; }"
+            "QPushButton:hover { background-color: #9b59b6; }"
+            "QPushButton:disabled { background-color: #bdc3c7; color: #7f8c8d; }"
+        )
+        self._btn_run_sensitivity.clicked.connect(self._on_run_sensitivity)
+        sens_layout.addRow("", self._btn_run_sensitivity)
+
+        sl.addWidget(sens_group)
+
+        # ============================================================
+        # 8. Run Button
         # ============================================================
         btn_layout = QHBoxLayout()
         self._btn_run = QPushButton("▶  Run LPTN Simulation")
@@ -693,6 +768,182 @@ class LPTNInputPanel(QWidget):
 
     def _on_run(self):
         self.runRequested.emit()
+
+
+    def _on_sens_param_changed(self, index):
+        param_name = self._cb_sensitivity_param.currentData()
+        for name, label, pmin, pmax, steps in SensitivityStudyRunner.SWEEP_PARAMS:
+            if name == param_name:
+                self._sb_sens_min.set_value_silent(pmin)
+                self._sb_sens_max.set_value_silent(pmax)
+                self._sb_sens_steps.set_value_silent(float(steps))
+                break
+
+    def _on_run_sensitivity(self):
+        param_name = self._cb_sensitivity_param.currentData()
+        pmin = self._sb_sens_min.value()
+        pmax = self._sb_sens_max.value()
+        n_steps = int(self._sb_sens_steps.value())
+        if n_steps < 2:
+            QMessageBox.warning(self, "Sensitivity", "Need at least 2 steps.")
+            return
+        values = [pmin + (pmax - pmin) * i / (n_steps - 1) for i in range(n_steps)]
+        self._sens_progress.setText("Running: 0/" + str(n_steps) + "...")
+        self._btn_run_sensitivity.setEnabled(False)
+        from PyQt5.QtCore import QTimer
+        self._sens_study = dict(
+            param_name=param_name,
+            param_label=self._cb_sensitivity_param.currentText(),
+            values=values,
+            results=[],
+            step=0,
+        )
+        QTimer.singleShot(50, self._run_sens_step)
+
+    def _run_sens_step(self):
+        from lpt_fe.solver import solve_steady_state
+        from lpt_fe.geometry_mapper_v2 import build_thermal_network_v2
+        study = self._sens_study
+        i = study["step"]
+        if i >= len(study["values"]):
+            self._sens_finished()
+            return
+        val = study["values"][i]
+        try:
+            parent = self.parent()
+            while parent and not hasattr(parent, '_geo_to_v2'):
+                parent = parent.parent()
+            if parent:
+                geo_v2 = parent._geo_to_v2()
+            else:
+                raise ValueError("Could not find MainWindow")
+        except Exception as e:
+            study["results"].append(dict(param_value=val, error=str(e), hotspot_temp=float('nan')))
+            study["step"] += 1
+            self._sens_progress.setText("Running: " + str(i+1) + "/" + str(len(study['values'])) + " (error)")
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(50, self._run_sens_step)
+            return
+        import copy
+        lptn_cfg = self.get_config()
+        cfg_mod = copy.deepcopy(lptn_cfg)
+        setattr(cfg_mod, study["param_name"], val)
+        try:
+            net = build_thermal_network_v2(geo_v2, cfg_mod)
+            T = solve_steady_state(net)
+            hotspot = max(net.nodes, key=lambda n: n.temperature)
+            study["results"].append(dict(
+                param_value=val,
+                temperatures={n.name: n.temperature for n in net.nodes},
+                hotspot_name=hotspot.name,
+                hotspot_temp=hotspot.temperature,
+                converged=getattr(net, 'solver_converged', False),
+            ))
+        except Exception as e:
+            study["results"].append(dict(param_value=val, error=str(e), hotspot_temp=float('nan')))
+        study["step"] += 1
+        last = study["results"][-1]
+        self._sens_progress.setText(
+            "Running: " + str(i+1) + "/" + str(len(study['values']))
+            + " -> " + str(round(last.get('hotspot_temp', float('nan')), 1)) + "C"
+        )
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(50, self._run_sens_step)
+
+    def _sens_finished(self):
+        self._btn_run_sensitivity.setEnabled(True)
+        study = self._sens_study
+        results = study["results"]
+        self._sens_progress.setText("Done! " + str(len(results)) + " runs completed.")
+
+        html_parts = ['<html><head><meta charset="utf-8">']
+        html_parts.append('<style>')
+        html_parts.append('body{font-family:Arial,sans-serif;margin:20px;}')
+        html_parts.append('h1{color:#2c3e50;}h2{color:#34495e;}')
+        html_parts.append('table{border-collapse:collapse;margin:8px 0;}')
+        html_parts.append('th,td{border:1px solid #bbb;padding:4px 10px;text-align:center;}')
+        html_parts.append('th{background:#2c3e50;color:white;}')
+        html_parts.append('tr:nth-child(even){background:#f5f5f5;}')
+        html_parts.append('.hot{color:#e74c3c;font-weight:bold;}')
+        html_parts.append('</style></head><body>')
+
+        param_label = study["param_label"]
+        html_parts.append('<h1>Sensitivity Study: ' + param_label + '</h1>')
+
+        all_nodes = set()
+        for r in results:
+            if 'temperatures' in r:
+                all_nodes.update(r['temperatures'].keys())
+        all_nodes = sorted(all_nodes)
+
+        html_parts.append('<table><tr><th>Value</th>')
+        for n in all_nodes:
+            html_parts.append('<th>' + n + '</th>')
+        html_parts.append('<th>Hotspot</th><th>T_hot [C]</th></tr>')
+
+        for r in results:
+            val = r['param_value']
+            if 'error' in r:
+                html_parts.append('<tr><td>' + str(round(val,4)) + '</td><td colspan="' + str(len(all_nodes)+2) + '" style="color:red">Error: ' + str(r['error']) + '</td></tr>')
+            else:
+                html_parts.append('<tr><td>' + str(round(val,4)) + '</td>')
+                for n in all_nodes:
+                    t = r['temperatures'].get(n, float('nan'))
+                    html_parts.append('<td>' + str(round(t,1)) + '</td>')
+                html_parts.append('<td>' + str(r['hotspot_name']) + '</td>')
+                html_parts.append('<td>' + str(round(r['hotspot_temp'],1)) + '</td></tr>')
+        html_parts.append('</table>')
+
+        if len(results) > 1 and 'temperatures' in results[0]:
+            baseline = results[0]
+            html_parts.append('<h2>Sensitivity (relative to baseline)</h2>')
+            html_parts.append('<table><tr><th>Value</th><th>Delta T_hot [C]</th><th>Sensitivity [C/unit]</th></tr>')
+            for r in results[1:]:
+                if 'hotspot_temp' in r and 'hotspot_temp' in baseline:
+                    dT = r['hotspot_temp'] - baseline['hotspot_temp']
+                    dv = r['param_value'] - baseline['param_value']
+                    sens = dT / dv if abs(dv) > 1e-12 else 0
+                    html_parts.append('<tr><td>' + str(round(r['param_value'],4)) + '</td>')
+                    html_parts.append('<td>' + ('+' if dT>=0 else '') + str(round(dT,1)) + 'C</td>')
+                    html_parts.append('<td>' + ('+' if sens>=0 else '') + str(round(sens,2)) + '</td></tr>')
+            html_parts.append('</table>')
+
+        html_parts.append('</body></html>')
+        full_html = '\n'.join(html_parts)
+
+        from PyQt5.QtWidgets import QMainWindow as QMWindow, QTextEdit
+        from PyQt5.QtCore import Qt
+
+        self._sens_window = QMWindow()
+        self._sens_window.setWindowTitle('Sensitivity: ' + param_label)
+        self._sens_window.setMinimumSize(900, 700)
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        viewer = QTextEdit()
+        viewer.setReadOnly(True)
+        viewer.setHtml(full_html)
+        layout.addWidget(viewer)
+        btn_bar = QHBoxLayout()
+        save_btn = QPushButton("Save to File...")
+        save_btn.setStyleSheet("QPushButton { background-color: #27ae60; color: white; border-radius: 4px; padding: 6px 16px; font-size: 10pt; }")
+        def save_sens():
+            fname, _ = QFileDialog.getSaveFileName(self._sens_window, "Save", "sensitivity.html", "HTML files (*.html)")
+            if fname:
+                with open(fname, 'w', encoding='utf-8') as f:
+                    f.write(full_html)
+                QMessageBox.information(self._sens_window, "Saved", "Report saved to:\n" + fname)
+        save_btn.clicked.connect(save_sens)
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("QPushButton { background-color: #e74c3c; color: white; border-radius: 4px; padding: 6px 16px; font-size: 10pt; }")
+        close_btn.clicked.connect(self._sens_window.close)
+        btn_bar.addWidget(save_btn)
+        btn_bar.addWidget(close_btn)
+        btn_bar.addStretch()
+        layout.addLayout(btn_bar)
+        self._sens_window.setCentralWidget(central)
+        self._sens_window.show()
+
 
     def get_config(self) -> NetworkBuilderConfig:
         """Read widgets and return a NetworkBuilderConfig."""
@@ -722,6 +973,11 @@ class LPTNInputPanel(QWidget):
         cfg.loss_iron_teeth = self._loss_widgets["iron_teeth"].value()
         cfg.loss_magnet = self._loss_widgets["magnet"].value()
         cfg.loss_mechanical = self._loss_widgets["mechanical"].value()
+
+        # Slot liner & bearing
+        cfg.slot_liner_thickness = self._sb_liner_thickness.value()
+        cfg.liner_conductivity = self._sb_liner_k.value()
+        cfg.shaft_to_endcap_resistance = self._sb_bearing_R.value()
 
         return cfg
 
@@ -758,6 +1014,14 @@ class LPTNInputPanel(QWidget):
         self._loss_widgets["magnet"].setValue(cfg.loss_magnet)
         self._loss_widgets["mechanical"].setValue(cfg.loss_mechanical)
 
+        # Slot liner & bearing
+        self._sb_liner_thickness.setValue(getattr(cfg, 'slot_liner_thickness', 0.3))
+        self._sb_liner_k.setValue(getattr(cfg, 'liner_conductivity', 0.25))
+        self._sb_bearing_R.setValue(getattr(cfg, 'shaft_to_endcap_resistance', 0.3))
+
+
+
+
 
 class ThermalNetworkCanvas(FigureCanvas):
     """
@@ -773,10 +1037,10 @@ class ThermalNetworkCanvas(FigureCanvas):
         self._net = None
 
     def draw_network(self, net: ThermalNetwork):
-        """Draw thermal network schematic using BFS tree layout."""
+        """Draw a schematic diagram of the thermal network with clear node spacing."""
         import numpy as np
-        from matplotlib.patches import Circle, Patch as MPatch
-        from collections import defaultdict, deque
+        from matplotlib.patches import Circle, FancyBboxPatch, Patch as MPatch
+        from collections import defaultdict
 
         self._net = net
         ax = self.ax
@@ -785,79 +1049,46 @@ class ThermalNetworkCanvas(FigureCanvas):
         nodes = net.nodes
         n = len(nodes)
 
-        # Build adjacency
-        adj = defaultdict(list)
-        for r in net.resistances:
-            if r.node_from < n and r.node_to < n:
-                adj[nodes[r.node_from].name].append(nodes[r.node_to].name)
-                adj[nodes[r.node_to].name].append(nodes[r.node_from].name)
+        # ---- Spread out positions ----
+        ambient_nodes = [node for node in nodes if "ambient" in node.name.lower() or node.name.lower() == "amb"]
+        other_nodes = [node for node in nodes if node not in ambient_nodes]
 
-        # Find root (ambient)
-        root = "ambient"
-        if root not in adj:
-            root = nodes[0].name
-
-        # BFS to get layers
-        dist = {root: 0}
-        q = deque([root])
-        parent = {root: None}
-        while q:
-            cur = q.popleft()
-            for nb in adj[cur]:
-                if nb not in dist:
-                    dist[nb] = dist[cur] + 1
-                    parent[nb] = cur
-                    q.append(nb)
-
-        for node in nodes:
-            if node.name not in dist:
-                dist[node.name] = max(dist.values()) + 1
-
-        # Group by layer
-        layers = defaultdict(list)
-        for name, d in dist.items():
-            layers[d].append(name)
-
-        # Assign y-spacing per layer so nodes don't overlap
-        # Use the max count across all layers to set global spacing
-        max_in_layer = max(len(names) for names in layers.values())
-        vert_spacing = max(3.0, 10.0 / max(max_in_layer, 1))
-
+        non_ambient = [n for n in other_nodes]
+        k = len(non_ambient)
         pos = {}
-        for layer_key in sorted(layers.keys()):
-            names = layers[layer_key]
-            m = len(names)
-            # Center the group around y=0
-            start_y = -(m - 1) * vert_spacing / 2
-            for i, name in enumerate(names):
-                x = layer_key * 2.5
-                y = start_y + i * vert_spacing
-                pos[name] = (x, y)
+        if k > 0:
+            angles = np.linspace(np.pi / 2 + np.pi / k, np.pi / 2 - np.pi / k, k)
+            for i, node in enumerate(non_ambient):
+                a = angles[i]
+                r = 3.5
+                x, y = r * np.cos(a), r * np.sin(a)
+                pos[node.name] = (x, y)
 
-        # ---- Temperature color ----
-        ambient_names = {node.name for node in nodes if "ambient" in node.name.lower()}
-        core_nodes = [n for n in nodes if n.name not in ambient_names]
-        temps_arr = np.array([n.temperature for n in core_nodes])
-        t_min = temps_arr.min() if len(temps_arr) > 0 else 20
-        t_max = temps_arr.max() if len(temps_arr) > 0 else 150
+        for node in ambient_nodes:
+            pos[node.name] = (0, 6.5)
+
+        # ---- Temperature color mapping ----
+        temps = np.array([node.temperature for node in nodes if "ambient" not in node.name.lower()])
+        t_min = temps.min() if len(temps) > 0 else 20
+        t_max = temps.max() if len(temps) > 0 else 150
         t_range = max(t_max - t_min, 1)
 
-        def temp_color(temp, is_ambient=False):
-            if is_ambient:
-                return "#4488FF"
-            norm = (temp - t_min) / t_range
-            r = min(1, norm * 2)
-            g = min(1, 2 - norm * 2) if norm < 0.5 else max(0, 2 - norm * 2)
-            b = max(0, 1 - norm * 2)
-            return (r, g, b)
+    def temp_color(temp, is_ambient=False):
+        if is_ambient:
+            return "#4488FF"
+        norm = (temp - t_min) / t_range
+        r = min(1, norm * 2)
+        g = min(1, 2 - norm * 2) if norm < 0.5 else max(0, 2 - norm * 2)
+        b = max(0, 1 - norm * 2)
+        return (r, g, b)
 
-        # ---- Draw resistances ----
+        # ---- Draw resistances with R and h info ----
         edge_style = defaultdict(int)
         r_annotations = []
 
         for res in net.resistances:
-            from_name = nodes[res.node_from].name if res.node_from < n else f"n{res.node_from}"
-            to_name = nodes[res.node_to].name if res.node_to < n else f"n{res.node_to}"
+            from_name = net.nodes[res.node_from].name if res.node_from < len(net.nodes) else f"n{res.node_from}"
+            to_name = net.nodes[res.node_to].name if res.node_to < len(net.nodes) else f"n{res.node_to}"
             if from_name not in pos or to_name not in pos:
                 continue
             x1, y1 = pos[from_name]
@@ -872,7 +1103,7 @@ class ThermalNetworkCanvas(FigureCanvas):
                 color = "#2980B9"
                 ls = "-"
 
-            offset = (edge_style[key] - 1) * 0.3
+            offset = (edge_style[key] - 1) * 0.15
             dx = x2 - x1
             dy = y2 - y1
             length = np.sqrt(dx**2 + dy**2)
@@ -883,17 +1114,18 @@ class ThermalNetworkCanvas(FigureCanvas):
             else:
                 x1o, y1o, x2o, y2o = x1, y1, x2, y2
 
-            ax.plot([x1o, x2o], [y1o, y2o], color=color, ls=ls, lw=1.5, zorder=1, alpha=0.6)
+            ax.plot([x1o, x2o], [y1o, y2o], color=color, ls=ls, lw=1.5, zorder=1, alpha=0.7)
 
+            # R label at midpoint with h if convection
             mx, my = (x1o + x2o) / 2, (y1o + y2o) / 2
             r_val = res.effective_resistance
-            parts = [f"R={r_val:.4f}"]
             if res.resistance_type == "convection" and res.h_coefficient > 0:
-                parts.append(f"h={res.h_coefficient:.0f}")
+                label_text = f"R={r_val:.4f}\nh={res.h_coefficient:.0f}"
             elif res.conductivity > 0:
-                parts.append(f"k={res.conductivity:.3f}")
-            label = "\\n".join(parts)
-            r_annotations.append((mx, my, label, color))
+                label_text = f"R={r_val:.4f}\nk={res.conductivity:.3f}"
+            else:
+                label_text = f"R={r_val:.4f}"
+            r_annotations.append((mx, my, label_text, color))
 
         for mx, my, text, color in r_annotations:
             ax.text(mx, my, text, fontsize=6.5, ha="center", va="center",
@@ -907,29 +1139,23 @@ class ThermalNetworkCanvas(FigureCanvas):
             is_ambient = name.lower() in ["ambient", "amb"]
             color = temp_color(node.temperature, is_ambient)
 
-            radius = 0.50
+            radius = 0.40
             circle = Circle((x, y), radius, facecolor=color, edgecolor="#333333",
                             linewidth=1.5, alpha=0.9, zorder=2)
             ax.add_patch(circle)
 
             # Node name inside circle
-            ax.text(x, y, name, fontsize=7, ha="center", va="center",
+            ax.text(x, y, name, fontsize=6.5, ha="center", va="center",
                     color="white" if node.temperature > 120 else "black",
                     fontweight="bold", zorder=3)
 
-            # Parameters below circle
-            lines_below = [f"{node.temperature:.1f}C"]
-            lines_below.append(f"Loss={node.effective_loss:.3f}W")
-            lines_below.append(f"Cap={node.capacitance:.1f}J/K")
-            lines_below.append(f"Vol={node.volume*1e6:.1f}cm3")
-            info_text = "\n".join(lines_below)
-            ax.text(x, y - radius - 0.5, info_text, fontsize=6,
-                    ha="center", va="top", color="#444",
-                    fontfamily="monospace", zorder=3)
+            # Temperature below circle
+            ax.text(x, y - radius - 0.25, f"{node.temperature:.1f}C", fontsize=7,
+                    ha="center", va="top", color="#333", fontweight="bold", zorder=3)
 
-            # Loss above circle (if significant)
+            # Loss if significant
             if node.effective_loss > 0.001:
-                ax.text(x, y + radius + 0.4, f"{node.effective_loss:.2f}W", fontsize=6.5,
+                ax.text(x, y + radius + 0.25, f"{node.effective_loss:.2f}W", fontsize=6.5,
                         ha="center", va="bottom", color="#C0392B", fontweight="bold", zorder=3)
 
         # ---- Legend ----
@@ -942,20 +1168,14 @@ class ThermalNetworkCanvas(FigureCanvas):
         ax.legend(handles=legend_elements, loc="lower center", fontsize=6,
                   ncol=4, bbox_to_anchor=(0.5, -0.06))
 
-        # Auto-scale
-        all_x = [v[0] for v in pos.values()]
-        all_y = [v[1] for v in pos.values()]
-        margin = 2.5
-        x_min, x_max = min(all_x) - margin, max(all_x) + margin
-        y_min, y_max = min(all_y) - margin, max(all_y) + margin
-
         ax.set_aspect("equal")
-        ax.set_title(f"Thermal Network: {net.name}", fontweight="bold", fontsize=11)
-        ax.set_xlim(x_min, x_max)
-        ax.set_ylim(y_min, y_max)
+        ax.set_title(f"Thermal Network: {net.name}", fontweight="bold", fontsize=10)
+        ax.set_xlim(-6, 6)
+        ax.set_ylim(-5, 8)
         ax.axis("off")
         self.fig.tight_layout(rect=[0, 0.04, 1, 0.96])
         self.draw()
+
 class ResultPanel(QWidget):
     """
     Panel showing detailed LPTN model results (in the Results tab).
@@ -992,6 +1212,18 @@ class ResultPanel(QWidget):
             "QPushButton:disabled { background-color: #cccccc; color: #888888; }"
         )
         btn_layout.addWidget(self._btn_undock)
+
+        # Export HTML Report button
+        self._btn_export_html = QPushButton("HTML Report")
+        self._btn_export_html.clicked.connect(self._export_html_report)
+        self._btn_export_html.setEnabled(False)
+        self._btn_export_html.setStyleSheet(
+            "QPushButton { background-color: #27ae60; color: white; "
+            "border-radius: 4px; padding: 4px 12px; font-size: 9pt; }"
+            "QPushButton:hover { background-color: #2ecc71; }"
+            "QPushButton:disabled { background-color: #cccccc; color: #888888; }"
+        )
+        btn_layout.addWidget(self._btn_export_html)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
@@ -1037,8 +1269,9 @@ class ResultPanel(QWidget):
             info += " | Converged" if conv else " | Not converged"
         self._net_info.setText(info)
 
-        # Enable undock button
+                # Enable buttons
         self._btn_undock.setEnabled(True)
+        self._btn_export_html.setEnabled(True)
 
         # Draw the schematic
         self._net_canvas.draw_network(net)
@@ -1048,23 +1281,23 @@ class ResultPanel(QWidget):
         self._node_table.setRowCount(len(nodes))
         for i, node in enumerate(nodes):
             self._node_table.setItem(i, 0, QTableWidgetItem(node.name))
-            
+
             t_item = QTableWidgetItem(f"{node.temperature:.1f}")
             t_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._node_table.setItem(i, 1, t_item)
-            
+
             p_item = QTableWidgetItem(f"{node.effective_loss:.2f}")
             p_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._node_table.setItem(i, 2, p_item)
-            
+
             v_item = QTableWidgetItem(f"{node.volume * 1e6:.1f}")
             v_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._node_table.setItem(i, 3, v_item)
-            
+
             c_item = QTableWidgetItem(f"{node.capacitance:.1f}")
             c_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._node_table.setItem(i, 4, c_item)
-            
+
             td_item = QTableWidgetItem(
                 "Yes" if node.loss_temperature_dependent else "No"
             )
@@ -1078,27 +1311,27 @@ class ResultPanel(QWidget):
         self._res_table.setRowCount(len(reses))
         for i, res in enumerate(reses):
             self._res_table.setItem(i, 0, QTableWidgetItem(res.name))
-            
+
             # Get node names for the indices
             from_name = net.nodes[res.node_from].name if res.node_from < len(net.nodes) else f"n{res.node_from}"
             to_name = net.nodes[res.node_to].name if res.node_to < len(net.nodes) else f"n{res.node_to}"
             conn_item = QTableWidgetItem(f"{from_name} -> {to_name}")
             self._res_table.setItem(i, 1, conn_item)
-            
+
             r_item = QTableWidgetItem(f"{res.effective_resistance:.4f}")
             r_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._res_table.setItem(i, 2, r_item)
-            
+
             self._res_table.setItem(i, 3, QTableWidgetItem(res.resistance_type))
-            
+
             len_item = QTableWidgetItem(f"{res.effective_length * 1000:.2f}")
             len_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._res_table.setItem(i, 4, len_item)
-            
+
             area_item = QTableWidgetItem(f"{res.effective_area * 1e6:.2f}")
             area_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._res_table.setItem(i, 5, area_item)
-            
+
             # Show k (for conduction) or h (for convection)
             if res.resistance_type == "convection" and res.h_coefficient > 0:
                 kh_item = QTableWidgetItem(f"h={res.h_coefficient:.1f}")
@@ -1120,22 +1353,199 @@ class ResultPanel(QWidget):
         self._undock_window = QMWindow()
         self._undock_window.setWindowTitle("Thermal Network Diagram")
         self._undock_window.setMinimumSize(1000, 700)
-        
+
         central = QWidget()
         layout = QVBoxLayout(central)
-        
+
         # Larger canvas for the undocked view
         canvas = ThermalNetworkCanvas(self._undock_window, width=12, height=7, dpi=100)
         canvas.draw_network(self._net)
         layout.addWidget(canvas)
-        
+
         # Close button
         close_btn = QPushButton("Close Window")
         close_btn.clicked.connect(self._undock_window.close)
         layout.addWidget(close_btn)
-        
+
         self._undock_window.setCentralWidget(central)
         self._undock_window.show()
+
+    def _export_html_report(self):
+        """Display an HTML report of the LPTN results in a new window."""
+        if not self._net:
+            QMessageBox.warning(self, "No Data", "Run LPTN simulation first.")
+            return
+
+        net = self._net
+
+        # Build HTML
+        html_parts = ['<html><head><meta charset="utf-8">']
+        html_parts.append('<style>')
+        html_parts.append('body{font-family:Arial,sans-serif;margin:20px;}')
+        html_parts.append('h1{color:#2c3e50;}h2{color:#34495e;}')
+        html_parts.append('table{border-collapse:collapse;margin:8px 0;width:100%;}')
+        html_parts.append('th,td{border:1px solid #bbb;padding:4px 10px;text-align:center;}')
+        html_parts.append('th{background:#2c3e50;color:white;}')
+        html_parts.append('tr:nth-child(even){background:#f5f5f5;}')
+        html_parts.append('.hot{color:#e74c3c;font-weight:bold;}')
+        html_parts.append('</style></head><body>')
+
+        html_parts.append('<h1>LPTN Thermal Analysis Report</h1>')
+
+        conv = getattr(net, 'solver_converged', None)
+        iters = getattr(net, 'solver_iterations', None)
+        html_parts.append(f'<p>Network: {net.name} | {len(net.nodes)} nodes, {len(net.resistances)} resistances')
+        if iters:
+            html_parts.append(f' | {iters} iterations')
+            html_parts.append(' | Converged' if conv else ' | Not converged')
+        html_parts.append('</p>')
+
+        # Node table
+        html_parts.append('<h2>Node Temperatures</h2>')
+        html_parts.append('<table><tr><th>Node</th><th>T [C]</th><th>Loss [W]</th><th>Volume [cm3]</th><th>Capacitance [J/K]</th></tr>')
+        nodes = net.nodes
+        for node in nodes:
+            html_parts.append(f'<tr><td>{node.name}</td>')
+            html_parts.append(f'<td>{node.temperature:.1f}</td>')
+            html_parts.append(f'<td>{node.effective_loss:.2f}</td>')
+            html_parts.append(f'<td>{node.volume * 1e6:.1f}</td>')
+            html_parts.append(f'<td>{node.capacitance:.1f}</td></tr>')
+        html_parts.append('</table>')
+
+        # Hotspot
+        hotspot = max(net.nodes, key=lambda n: n.temperature)
+        html_parts.append(f'<h2>Hotspot</h2>')
+        html_parts.append(f'<p class="hot">{hotspot.name}: {hotspot.temperature:.1f} C</p>')
+
+        # Resistance table
+        html_parts.append('<h2>Thermal Resistances</h2>')
+        html_parts.append('<table><tr><th>Name</th><th>From -> To</th><th>R [K/W]</th><th>Type</th><th>Length [mm]</th><th>Area [mm2]</th><th>k/h</th></tr>')
+        for res in net.resistances:
+            from_name = net.nodes[res.node_from].name if res.node_from < len(net.nodes) else f"n{res.node_from}"
+            to_name = net.nodes[res.node_to].name if res.node_to < len(net.nodes) else f"n{res.node_to}"
+            html_parts.append(f'<tr><td>{res.name}</td>')
+            html_parts.append(f'<td>{from_name} -> {to_name}</td>')
+            html_parts.append(f'<td>{res.effective_resistance:.4f}</td>')
+            html_parts.append(f'<td>{res.resistance_type}</td>')
+            html_parts.append(f'<td>{res.effective_length * 1000:.2f}</td>')
+            html_parts.append(f'<td>{res.effective_area * 1e6:.2f}</td>')
+            if res.resistance_type == "convection" and res.h_coefficient > 0:
+                html_parts.append(f'<td>h={res.h_coefficient:.1f}</td>')
+            elif res.conductivity > 0:
+                html_parts.append(f'<td>k={res.conductivity:.3f}</td>')
+            else:
+                html_parts.append('<td>-</td>')
+            html_parts.append('</tr>')
+        html_parts.append('</table>')
+
+        html_parts.append('</body></html>')
+        full_html = '\n'.join(html_parts)
+
+        # Show in a new window
+        from PyQt5.QtWidgets import QMainWindow as QMWindow, QTextEdit
+        from PyQt5.QtCore import Qt
+
+        self._report_window = QMWindow()
+        self._report_window.setWindowTitle("LPTN Thermal Analysis Report")
+        self._report_window.setMinimumSize(1000, 750)
+
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        viewer = QTextEdit()
+        viewer.setReadOnly(True)
+        viewer.setHtml(full_html)
+        layout.addWidget(viewer)
+
+        # Save button at the bottom
+        btn_bar = QHBoxLayout()
+        save_btn = QPushButton("Save to File...")
+        save_btn.setStyleSheet(
+            "QPushButton { background-color: #27ae60; color: white; "
+            "border-radius: 4px; padding: 6px 16px; font-size: 10pt; }"
+        )
+        def save_report():
+            fname, _ = QFileDialog.getSaveFileName(
+                self._report_window, "Save HTML Report", "thermal_report.html",
+                "HTML files (*.html);;All files (*)")
+            if fname:
+                try:
+                    with open(fname, 'w', encoding='utf-8') as f:
+                        f.write(full_html)
+                    QMessageBox.information(self._report_window, "Saved",
+                        f"Report saved to:\n{fname}")
+                except Exception as e:
+                    QMessageBox.warning(self._report_window, "Save Error", str(e))
+        save_btn.clicked.connect(save_report)
+
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(
+            "QPushButton { background-color: #e74c3c; color: white; "
+            "border-radius: 4px; padding: 6px 16px; font-size: 10pt; }"
+        )
+        close_btn.clicked.connect(self._report_window.close)
+
+        btn_bar.addWidget(save_btn)
+        btn_bar.addWidget(close_btn)
+        btn_bar.addStretch()
+        layout.addLayout(btn_bar)
+
+        self._report_window.setCentralWidget(central)
+        self._report_window.show()
+
+
+class SensitivityStudyRunner:
+    """Run a parametric sensitivity study on LPTN parameters.
+    Varies one parameter at a time and records the hotspot temperature.
+    """
+
+    SWEEP_PARAMS = [
+        ("slot_liner_thickness", "Liner Thickness [mm]", 0.05, 1.0, 6),
+        ("liner_conductivity", "Liner Conductivity [W/mK]", 0.05, 0.5, 6),
+        ("shaft_to_endcap_resistance", "Bearing Resistance [K/W]", 0.01, 2.0, 6),
+        ("housing_air_speed", "Air Speed [m/s]", 0.5, 10.0, 6),
+        ("ambient_temperature", "Ambient Temp [C]", 20, 60, 5),
+        ("loss_copper_slot", "Copper Loss [W]", 10, 200, 6),
+        ("loss_iron_yoke", "Yoke Iron Loss [W]", 0, 50, 5),
+        ("loss_magnet", "Magnet Loss [W]", 0, 30, 5),
+    ]
+
+    def __init__(self, geo_v2, base_config):
+        self.geo = geo_v2
+        self.base = base_config
+
+    def run_sweep(self, param_name, values, progress_callback=None):
+        from lpt_fe.geometry_mapper_v2 import build_thermal_network_v2
+        from lpt_fe.solver import solve_steady_state
+        results = []
+        for i, val in enumerate(values):
+            cfg = self._make_config(param_name, val)
+            try:
+                net = build_thermal_network_v2(self.geo, cfg)
+                T = solve_steady_state(net)
+                hotspot = max(net.nodes, key=lambda n: n.temperature)
+                results.append(dict(
+                    param_value=val,
+                    temperatures={n.name: n.temperature for n in net.nodes},
+                    hotspot_name=hotspot.name,
+                    hotspot_temp=hotspot.temperature,
+                    converged=getattr(net, 'solver_converged', False),
+                ))
+            except Exception as e:
+                results.append(dict(
+                    param_value=val, error=str(e), hotspot_temp=float('nan'),
+                ))
+            if progress_callback:
+                progress_callback(i + 1, len(values))
+        return results
+
+    def _make_config(self, param_name, value):
+        import copy
+        cfg = copy.deepcopy(self.base)
+        setattr(cfg, param_name, value)
+        return cfg
+
 class MainWindow(QMainWindow):
     """Main application window."""
 
@@ -1155,18 +1565,23 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(1)
 
         # ============================================================
         # Left Panel: Input Tabs
         # ============================================================
         left_panel = QWidget()
-        left_panel.setMinimumWidth(380)
-        left_panel.setMaximumWidth(500)
+        left_panel.setMinimumWidth(350)
+        left_panel.setMaximumWidth(480)
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 5, 0)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
 
         self._tabs = QTabWidget()
         self._tabs.setTabPosition(QTabWidget.North)
+        self._tabs.setDocumentMode(True)
+        self._tabs.setStyleSheet("QTabWidget::pane { border: none; }")
 
         # Tab 1: Geometry
         self._geo_panel = GeometryInputPanel()
@@ -1186,18 +1601,23 @@ class MainWindow(QMainWindow):
 
         left_layout.addWidget(self._tabs)
 
-                # ============================================================
+        # ============================================================
         # Right Panel: Geometry CAD (always visible)
         # ============================================================
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(5, 0, 0, 0)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(2)
 
-        # Geometry CAD canvas
+        # Geometry CAD canvas - stretches to fill space
         self._canvas = MotorGeometryCanvas(self, width=9, height=8, dpi=100)
+        self._canvas.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding
+        )
 
         # Controls below CAD
         controls_layout = QHBoxLayout()
+        controls_layout.setContentsMargins(4, 2, 4, 2)
         self._cb_labels = QCheckBox("Show Labels")
         self._cb_labels.setChecked(True)
         self._cb_labels.stateChanged.connect(self._redraw)
@@ -1213,21 +1633,17 @@ class MainWindow(QMainWindow):
 
         # Status info label
         self._status_label = QLabel("Ready. Adjust parameters to update geometry.")
-        self._status_label.setStyleSheet("font-size: 9pt; color: #666;")
+        self._status_label.setStyleSheet("font-size: 9pt; color: #666; padding: 2px 4px;")
 
-        right_layout.addWidget(self._canvas)
+        right_layout.addWidget(self._canvas, stretch=1)
         right_layout.addLayout(controls_layout)
         right_layout.addWidget(self._status_label)
 
         # ============================================================
-        # Splitter between left and right
+        # Layout: left panel + right panel side by side
         # ============================================================
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(left_panel)
-        splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 0)  # Left doesn't stretch
-        splitter.setStretchFactor(1, 1)  # Right stretches
-        main_layout.addWidget(splitter)
+        main_layout.addWidget(left_panel)
+        main_layout.addWidget(right_panel, stretch=1)
 
         # Status bar
         self.statusBar().showMessage("Ready")
@@ -1311,7 +1727,9 @@ class MainWindow(QMainWindow):
         try:
             geo_v2 = self._geo_to_v2()
             lptn_cfg = self._lptn_panel.get_config()
-            net = build_thermal_network(geo_v2, lptn_cfg)
+            # Use v2 builder (modelingPrinciple.md topology)
+            from lpt_fe.geometry_mapper_v2 import build_thermal_network_v2
+            net = build_thermal_network_v2(geo_v2, lptn_cfg)
             T = solve_steady_state(net)
             self._display_lptn_results(net)
             self._result_panel.display_network(net, lptn_cfg)
@@ -1323,7 +1741,16 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"LPTN: {status} | {iterations} iters | T_max={max_temp:.0f}C"
             )
+            # Redraw geometry with temperature annotations
+            self._redraw()
+            # Switch to Results tab to show results
+            for i in range(self._tabs.count()):
+                if "Results" in self._tabs.tabText(i):
+                    self._tabs.setCurrentIndex(i)
+                    break
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             QMessageBox.critical(self, "LPTN Error", f"Simulation failed:\n{e}")
             self.statusBar().showMessage(f"LPTN error: {e}")
 
@@ -1332,7 +1759,7 @@ class MainWindow(QMainWindow):
         self._lptn_results = {}
         nodes = net.nodes
         n = len(nodes)
-        
+
         # Build a compact results dict for status display
         for i, node in enumerate(nodes):
             self._lptn_results[node.name] = (node.temperature, node.effective_loss)
@@ -1343,12 +1770,17 @@ class MainWindow(QMainWindow):
     def _redraw(self):
         """Redraw the geometry plot, with temperature annotations if available."""
         try:
+            # Compute font scale based on canvas pixel width
+            font_scale = max(0.5, self._canvas.width() / 600.0)
             self._canvas.draw_cross_section(
                 self._geo,
                 show_labels=self._cb_labels.isChecked(),
                 show_dimensions=self._cb_dims.isChecked(),
                 node_temperatures=self._lptn_results,
+                font_scale=font_scale,
             )
+            # Auto-fit the view to fill the canvas
+            self._fit_view()
             # Build status string
             parts = [
                 f"Geometry: {self._geo.structure_type}",
@@ -1365,6 +1797,27 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._status_label.setText(f"❌ Draw error: {e}")
             self.statusBar().showMessage(f"Error: {e}")
+
+    def resizeEvent(self, event):
+        """Auto-fit the geometry when the window is resized."""
+        super().resizeEvent(event)
+        if hasattr(self, '_canvas') and self._canvas:
+            self._redraw()
+
+    def _fit_view(self):
+        """Fit the geometry to fill the canvas. Canvas shows 1.2x the motor OD."""
+        if not hasattr(self, '_geo') or not self._geo:
+            return
+        try:
+            motor_OD = self._geo.Rso + self._geo.housing_wall_thickness
+            limit = motor_OD * 1.2
+            self._canvas.ax.set_xlim(-limit, limit)
+            self._canvas.ax.set_ylim(-limit, limit)
+            self._canvas.ax.set_aspect('equal')
+            self._canvas.fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+            self._canvas.draw()
+        except Exception:
+            pass
 
     def _import_params(self):
         """Import geometry + LPTN parameters from a JSON file."""

@@ -44,6 +44,10 @@ class NetworkBuilderConfig:
         # Speed
         self.speed_rpm: float = 3000.0
         
+        # Slot liner properties (for winding insulation)
+        self.slot_liner_thickness: float = 0.3     # [mm] slot liner paper thickness
+        self.liner_conductivity: float = 0.25      # [W/mK] liner material k (Nomex ~0.25)
+        
         # 3D settings
         self.n_axial_slices: int = 3
         self.end_winding_length: Optional[float] = None  # [m] auto-calculated if None
@@ -156,16 +160,16 @@ class GeometryMapper:
           0: Ambient (BC, fixed T)
           1: Housing
           2: Stator Yoke
-          3: Stator Tooth Body (between slots)
+          3: Stator Tooth Body (including tip region Hs0)
           4: Slot Winding (homogenized)
-          5: Stator Tooth Tip (at bore, height Hs0)
-          6: Airgap (convective coupling only - not a temperature node)
-          7: Magnet
-          8: Rotor Core
-          9: Shaft
+          5: Airgap (separate thermal node)
+          6: Magnet
+          7: Rotor Core
+          8: Shaft
         
-        The airgap is modeled as convective resistance between nodes 5 and 7,
-        not as a separate node (no thermal mass).
+        The airgap is a separate thermal node connected to:
+          - Stator Tooth and Slot Winding (stationary side, in parallel)
+          - Magnet (rotating side, Taylor number correlation)
         """
         geo = self.geo
         cfg = self.config
@@ -280,6 +284,10 @@ class GeometryMapper:
             # Average tooth width for body region (Hs1 + Hs2)
             avg_tooth_width_body = (tooth_top_arc + tooth_bottom_arc) / 2
             V_teeth = N_slots * avg_tooth_width_body * (Hs1_m + Hs2_m) * Lstk_m * sf
+            # Include tooth tip (Hs0) volume in tooth body
+            tip_arc = slot_pitch_angle * Rsi_m - Bs0_m
+            V_tip = N_slots * tip_arc * Hs0_m * Lstk_m * sf
+            V_teeth += V_tip
             
             # If sector model, scale by sector fraction
             if sf < 1.0:
@@ -320,23 +328,7 @@ class GeometryMapper:
         idx_winding = idx
         idx += 1
         
-        # 5. Stator Tooth Tip (at bore, height Hs0)
-        if is_slotted:
-            # Tooth tip width at bore = slot_pitch_at_bore - Bs0
-            tooth_tip_arc = slot_pitch_angle * Rsi_m - Bs0_m
-            V_tip = N_slots * tooth_tip_arc * Hs0_m * Lstk_m * sf
-        else:
-            V_tip = 0
-        
-        nodes.append(ThermalNode(
-            name="stator_tip", index=idx, volume=max(V_tip, 1e-12),
-            density=rho("stator_core"), cp=cp_val("stator_core"),
-            loss=0,
-        ))
-        idx_tip = idx
-        idx += 1
-        
-        # 6. Airgap (separate thermal node)
+        # 5. Airgap (separate thermal node)
         # Airgap volume = annular volume between Rsi and Rro
         V_airgap = math.pi * (Rsi_m**2 - Rro_m**2) * Lstk_m * sf
         # Air density at ~80C, cp ~ 1005 J/kgK
@@ -457,15 +449,6 @@ class GeometryMapper:
         add_R("R_tooth_yoke", idx_tooth, idx_yoke, R_tooth_yoke,
               effective_length=Rso_m - Rslot_bottom_m)
         
-        # R4: Stator Tip → Stator Tooth (through opening/shoulder region)
-        if is_slotted:
-            R_tip_tooth = r_cylindrical_radial(
-                Rsi_m, Rsi_m + Hs0_m + Hs1_m + Hs2_m, Lstk_m, k_radial("stator_core"),
-                sector_fraction=sf * N_slots * (1 - Bs0_m/(slot_pitch_angle*Rsi_m))
-            )
-        else:
-            R_tip_tooth = 0.01
-        add_R("R_tip_tooth", idx_tip, idx_tooth, R_tip_tooth)
         
         # R5: Slot Winding → Stator Tooth (parallel paths through slot liner)
         if is_slotted and N_slots > 0:
@@ -552,49 +535,33 @@ class GeometryMapper:
         add_R("R_winding_yoke", idx_winding, idx_yoke, R_winding_yoke_total,
               effective_length=Hs0_m+Hs1_m+Hs2_m if is_slotted else 0)
         
-        # R7: Stator Tip → Slot Winding (through slot opening, Bs0 region)
-        # This path is through the air in the slot opening (very high resistance).
-        # Most heat from winding goes to walls and bottom, not through the opening.
-        # Keep this as a weak coupling path.
-        if is_slotted and Bs0_m > 0 and N_slots > 0:
-            # Slot opening area = Hs0 * Bs0 per slot
-            A_opening_per_slot = Hs0_m * Bs0_m
-            A_opening_total = A_opening_per_slot * N_slots * sf
-            if A_opening_total > 0 and Hs0_m > 0:
-                # Effective k of air + wedge in opening
-                # Wedge has k ~ 0.2, air k=0.026. Use k ≈ 0.1 for wedge-filled opening
-                k_opening = 0.15  # wedge material approximation
-                R_tip_winding = Hs0_m / (k_opening * A_opening_total)
-            else:
-                R_tip_winding = 1e6
-        else:
-            R_tip_winding = 1e6  # slotless: no separate tip
         
-        add_R("R_tip_winding", idx_tip, idx_winding, R_tip_winding, "convection",
-              effective_length=Hs0_m if is_slotted else 0)
-        
-                # R8: Stator Tip -> Airgap (stationary side convection)
-        # Heat transfer from stator bore surface to air in the gap
-        # Use natural/forced correlation for the stationary surface
-        h_ag_stator = h_airgap_natural(Rsi_m, gap_m, Lstk_m, 0)  # 0 rpm -> stationary side
-        # Area at stator bore
+                        # R8: Stator Tooth -> Airgap (stationary side convection, tooth face at bore)
         if is_slotted:
-            A_airgap_stator = 2 * math.pi * Rsi_m * Lstk_m * sf * (1 - Bs0_m / (slot_pitch_angle * Rsi_m))
+            # Tooth face area at bore = (slot pitch - slot opening) * stack length * N_slots * sector
+            tooth_arc_at_bore = slot_pitch_angle * Rsi_m - Bs0_m
+            A_tooth_bore = tooth_arc_at_bore * Lstk_m * N_slots * sf
         else:
-            A_airgap_stator = 2 * math.pi * Rsi_m * Lstk_m * sf
-        R_tip_airgap = r_convective(A_airgap_stator, h_ag_stator)
-        add_R("R_tip_airgap", idx_tip, idx_airgap, R_tip_airgap, "convection",
-              effective_area=A_airgap_stator, h_coefficient=h_ag_stator)
-        
-        # Also couple stator tooth directly to airgap (tip is small, tooth exposes more)
-        if is_slotted:
-            A_airgap_tooth = 2 * math.pi * Rsi_m * Lstk_m * sf * (1 - Bs0_m / (slot_pitch_angle * Rsi_m))
-            h_ag_tooth = h_airgap_natural(Rsi_m, gap_m, Lstk_m, 0)
-            R_tooth_airgap = r_convective(A_airgap_tooth, h_ag_tooth)
+            A_tooth_bore = 0  # slotless: no tooth
+        if A_tooth_bore > 0:
+            h_ag_tooth = h_airgap_natural(Rsi_m, gap_m, Lstk_m, 0)  # stationary side
+            R_tooth_airgap = r_convective(A_tooth_bore, h_ag_tooth)
             add_R("R_tooth_airgap", idx_tooth, idx_airgap, R_tooth_airgap, "convection",
-                  effective_area=A_airgap_tooth, h_coefficient=h_ag_tooth)
+                  effective_area=A_tooth_bore, h_coefficient=h_ag_tooth)
         
-        # R9: Airgap -> Magnet (rotor side, rotating convection)
+        # R9: Slot Winding -> Airgap (through slot opening, stationary side)
+        if is_slotted:
+            # Slot opening area at bore
+            A_winding_bore = Bs0_m * Lstk_m * N_slots * sf
+        else:
+            # Slotless: winding surface is the entire bore area
+            A_winding_bore = 2 * math.pi * Rsi_m * Lstk_m * sf
+        if A_winding_bore > 0:
+            h_ag_winding = h_airgap_natural(Rsi_m, gap_m, Lstk_m, 0)  # stationary side
+            R_winding_airgap = r_convective(A_winding_bore, h_ag_winding)
+            add_R("R_winding_airgap", idx_winding, idx_airgap, R_winding_airgap, "convection",
+                  effective_area=A_winding_bore, h_coefficient=h_ag_winding)
+# R9: Airgap -> Magnet (rotor side, rotating convection)
         # Rotating surface uses Taylor number correlation at full speed
         h_ag_rotor = h_airgap_natural(Rro_m, gap_m, Lstk_m, cfg.speed_rpm)
         A_airgap_rotor = 2 * math.pi * Rro_m * Lstk_m * sf
@@ -611,7 +578,7 @@ class GeometryMapper:
               effective_area=2*math.pi*Rmag_inner_m*Lstk_m*sf,
               conductivity=k_radial("magnet"))
         
-        # R10: Shaft → Rotor Core
+        # R12: Shaft → Rotor Core
         R_shaft_rotor = r_cylindrical_radial(
             Rshaft_m, Rri_m, Lstk_m, k_radial("shaft"), sf
         )

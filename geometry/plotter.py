@@ -72,7 +72,7 @@ class MotorGeometryCanvas(FigureCanvas):
         self._dim_lines = []
 
     def draw_cross_section(self, geo_params, show_labels=True, show_dimensions=True,
-                            node_temperatures=None):
+                            node_temperatures=None, font_scale=1.0):
         """
         Main drawing function.
         Takes a MotorGeometryParams object and renders the cross-section.
@@ -219,7 +219,7 @@ class MotorGeometryCanvas(FigureCanvas):
                 r_label = Rro - geo_params.magnet_thickness / 2
                 ax.annotate("Magnet",
                             (r_label * math.cos(t_mid), r_label * math.sin(t_mid)),
-                            fontsize=6, ha="center", va="center", color="white",
+                            fontsize=6*font_scale, ha="center", va="center", color="white",
                             fontweight="bold")
 
         # === 5. Rotor core ===
@@ -239,7 +239,7 @@ class MotorGeometryCanvas(FigureCanvas):
             # Component labels
             # Housing label
             ax.annotate("Housing", (0, Rso + hw + 3),
-                        fontsize=8, ha="center", va="bottom",
+                        fontsize=8*font_scale, ha="center", va="bottom",
                         color=COLORS["housing"], fontweight="bold")
 
             # Stator label
@@ -247,38 +247,38 @@ class MotorGeometryCanvas(FigureCanvas):
                 winding_thickness = geo_params.slot_depth
                 Rwinding_outer = Rsi + winding_thickness
                 ax.annotate("Stator Core", (0, (Rso + Rwinding_outer) / 2),
-                            fontsize=8, ha="center", va="center",
+                            fontsize=8*font_scale, ha="center", va="center",
                             color="black", fontweight="bold")
                 if winding_thickness > 0:
                     ax.annotate("Winding", (0, (Rsi + Rwinding_outer) / 2),
-                                fontsize=7, ha="center", va="center",
+                                fontsize=7*font_scale, ha="center", va="center",
                                 color="#8B6914", fontweight="bold")
             else:
                 ax.annotate("Stator Yoke", (Rso * 0.7, Rso * 0.7),
-                            fontsize=7, ha="center", color="black", fontweight="bold")
+                            fontsize=7*font_scale, ha="center", color="black", fontweight="bold")
 
             if geo_params.structure_type != "Slotless":
                 ax.annotate("Winding", (0, Rsi + geo_params.slot_depth / 2),
-                            fontsize=7, ha="center", va="center",
+                            fontsize=7*font_scale, ha="center", va="center",
                             color="#8B6914", fontweight="bold")
 
             ax.annotate("Airgap", (Rro + (Rsi - Rro) / 2, 0),
-                        fontsize=7, ha="center", va="center",
+                        fontsize=7*font_scale, ha="center", va="center",
                         color="gray", fontweight="bold", rotation=90)
 
             ax.annotate("Rotor Core", (0, (Rro - geo_params.magnet_thickness) / 2),
-                        fontsize=7, ha="center", va="center",
+                        fontsize=7*font_scale, ha="center", va="center",
                         color="black", fontweight="bold")
 
-            ax.annotate("Shaft", (0, 0), fontsize=7,
+            ax.annotate("Shaft", (0, 0), fontsize=7*font_scale,
                         ha="center", va="center", color="white", fontweight="bold")
 
         if show_dimensions:
-            self._draw_dimensions(ax, geo_params)
+            self._draw_dimensions(ax, geo_params, font_scale=font_scale)
 
         # === 8. Temperature annotations (from LPTN solver) ===
         if node_temperatures is not None and len(node_temperatures) > 0:
-            self._draw_temperature_annotations(ax, geo_params, node_temperatures)
+            self._draw_temperature_annotations(ax, geo_params, node_temperatures, font_scale=font_scale)
 
         # Set plot limits with some padding
         max_r = Rso + hw + 10
@@ -287,10 +287,9 @@ class MotorGeometryCanvas(FigureCanvas):
         ax.set_aspect("equal")
         ax.set_title("Motor Cross-Section (Radial View)", fontweight="bold")
 
-        self.fig.tight_layout()
         self.draw()
 
-    def _draw_temperature_annotations(self, ax, geo, node_temps):
+    def _draw_temperature_annotations(self, ax, geo, node_temps, font_scale=1.0):
         """
         Draw temperature annotations on the geometry.
         node_temps: dict of name -> (temperature, loss)
@@ -352,7 +351,7 @@ class MotorGeometryCanvas(FigureCanvas):
                 label += f"\n{loss:.1f}W"
 
             ax.annotate(label, xy=(x, y),
-                        fontsize=6, ha="center", va="center",
+                        fontsize=6*font_scale, ha="center", va="center",
                         color="white", fontweight="bold",
                         bbox=dict(boxstyle="round,pad=0.2",
                                   facecolor=bg,
@@ -360,7 +359,7 @@ class MotorGeometryCanvas(FigureCanvas):
                                   linewidth=0.5,
                                   alpha=0.85))
 
-    def _draw_dimensions(self, ax, geo):
+    def _draw_dimensions(self, ax, geo, font_scale=1.0):
         """Draw dimension lines and annotations on the plot."""
         # Only show a few key dimensions to avoid clutter
         max_r = geo.Rso + geo.housing_wall_thickness
@@ -371,24 +370,24 @@ class MotorGeometryCanvas(FigureCanvas):
         ax.annotate(f"$R_{{so}}$={geo.Rso}",
                      xy=(geo.Rso, 0), xytext=(geo.Rso, y_dim),
                      arrowprops=dict(arrowstyle="->", color="black", lw=0.8),
-                     fontsize=7, ha="center", va="bottom")
+                     fontsize=7*font_scale, ha="center", va="bottom")
 
         # Stator ID
         ax.annotate(f"$R_{{si}}$={geo.Rsi}",
                      xy=(geo.Rsi, 0), xytext=(geo.Rsi, y_dim - 3),
                      arrowprops=dict(arrowstyle="->", color="black", lw=0.8),
-                     fontsize=7, ha="center", va="bottom")
+                     fontsize=7*font_scale, ha="center", va="bottom")
 
         # Rotor OD
         ax.annotate(f"$R_{{ro}}$={geo.Rro}",
                      xy=(geo.Rro, 0), xytext=(geo.Rro, y_dim - 6),
                      arrowprops=dict(arrowstyle="->", color="black", lw=0.8),
-                     fontsize=7, ha="center", va="bottom")
+                     fontsize=7*font_scale, ha="center", va="bottom")
 
         # Stack length annotation
         ax.annotate(f"$L_{{stk}}$={geo.stack_length} mm",
                      xy=(0, -max_r * 0.85),
-                     fontsize=8, ha="center", va="top",
+                     fontsize=8*font_scale, ha="center", va="top",
                      bbox=dict(boxstyle="round,pad=0.3",
                                facecolor="lightyellow",
                                edgecolor="black", alpha=0.8))
@@ -399,7 +398,7 @@ class MotorGeometryCanvas(FigureCanvas):
                     f"{geo.structure_type}")
         ax.annotate(info_str,
                      xy=(0, -max_r * 0.95),
-                     fontsize=8, ha="center", va="top",
+                     fontsize=8*font_scale, ha="center", va="top",
                      bbox=dict(boxstyle="round,pad=0.3",
                                facecolor="lightblue",
                                edgecolor="black", alpha=0.7))

@@ -60,6 +60,8 @@ class ThermalResistance:
     effective_area: float = 0.0      # [m²]
     conductivity: float = 0.0        # [W/m·K]
     h_coefficient: float = 0.0       # [W/m²K] for convection (inferred or stored)
+    liner_thickness: float = 0.0     # [m] slot liner thickness
+    liner_conductivity: float = 0.0  # [W/mK] slot liner thermal conductivity
     user_override: Optional[float] = None
 
     @property
@@ -151,3 +153,4 @@ class ThermalNetwork:
                 "Volume [cm³]": round(n.volume * 1e6, 2),
             })
         return rows
+
